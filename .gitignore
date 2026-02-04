@@ -1,0 +1,39 @@
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Output directories
+out/
+output/
+
+# Package files
+*.tgz
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+tmp/
+
+# Nix
+result/
+result
+
+# direnv
+.direnv/
+.envrc.local
+
+# Generated files
+CLAUDE.md
+AGENTS.md

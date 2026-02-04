@@ -1,0 +1,37 @@
+{
+  "name": "@cvt/replay-helpers",
+  "version": "0.0.0-development",
+  "description": "Cucumber test helpers for the replay harness",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "build": "node -e \"console.error('Use Nix: nix build .#helpers'); process.exit(1)\"",
+    "test": "node -e \"console.error('Use Nix: nix flake check'); process.exit(1)\""
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "zstd-napi": "^0.0.12"
+  },
+  "peerDependencies": {
+    "@cucumber/cucumber": ">=10.0.0"
+  },
+  "keywords": [
+    "testing",
+    "cucumber",
+    "replay",
+    "harness",
+    "fixtures"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cambridge-Vision-Technology/replay.git"
+  },
+  "author": "Cambridge Vision Technology",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

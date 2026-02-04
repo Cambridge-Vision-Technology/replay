@@ -1,0 +1,21 @@
+{
+  "name": "@cambridge-vision-technology/echo-client",
+  "version": "0.0.0-development",
+  "description": "Demo application showing replay harness integration for HTTP requests",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "node -e \"console.error('Use Nix: nix build .#echo-client'); process.exit(1)\""
+  },
+  "keywords": [
+    "demo",
+    "replay",
+    "harness",
+    "http"
+  ],
+  "author": "Cambridge Vision Technology",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

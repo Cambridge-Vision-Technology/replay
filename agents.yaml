@@ -1,0 +1,71 @@
+project:
+  name: "replay"
+  tags:
+    [
+      "general",
+      "testing",
+      "harness",
+      "javascript",
+      "nix",
+      "purescript",
+      "purescript-algebraic-effects",
+    ]
+  description: "Replay Library"
+  header: |
+    # replay
+
+    Recording/playback harness for deterministic testing of external effects (LLM, HTTP, cloud APIs).
+
+    ## Modes
+
+    | Mode | Behavior | Command |
+    |------|----------|---------|
+    | Live | Execute real effects | `nix run .#test-live` |
+    | Record | Execute + save fixtures | `nix run .#test-record` |
+    | Playback | Replay from fixtures | `nix flake check` |
+
+    ## How It Works
+
+    1. App sends effects as data to harness via WebSocket
+    2. Harness serializes request -> removes non-deterministic fields -> SHA-256 hash
+    3. **Record**: Execute effect, store response keyed by hash
+    4. **Playback**: Look up hash -> return stored response
+
+    **Same hash = same response.** No type-specific matching logic.
+
+    ## Workflow Order (CRITICAL)
+
+    **NEVER start with playback.** Playback failures hide the real issue.
+
+    1. **Live first** -> Proves your logic works
+    2. **Record** -> Captures fixtures
+    3. **Playback** -> Verifies packaging
+    If playback fails after live passes, it's ALWAYS a packaging/fixture issue, not code.
+
+  footer: |
+    This file is generated, do not edit it directly. Edit either the project specific information in [agents.yaml](./agents.yaml) or the [company guidance](https://github.com/Cambridge-Vision-Technology/agen/wiki) and then rerun `agen`
+    To install the agen tool `nix profile add github:Cambridge-Vision-Technology/agen`
+
+    # Replay Repo Guidance
+
+    ## Package Variants
+
+    - `packages.default`: Main replay harness binary
+    - `packages.deps`: Node.js dependencies
+
+    ## Architecture
+
+    The replay harness acts as a WebSocket server that intercepts external effects:
+
+    ```
+    App -> WebSocket -> Replay Harness -> External Service (live/record)
+                                       -> Fixture Store (playback)
+    ```
+
+    ## Fixture Layout
+
+    ```
+    fixtures/{feature}/{scenario}/files/
+    ├── platform-recording.json     # Recorded request/response pairs
+    └── {input-files}               # Test inputs
+    ```
