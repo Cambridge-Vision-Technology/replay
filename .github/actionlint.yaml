@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - x86_64-linux
+    - macos-arm64-nix-darwin
