@@ -7,6 +7,13 @@ module Replay.Player
   , playbackRequest
   , markMessageUsed
   , getTranslationMap
+  -- Lazy loading support
+  , LazyPlayerState
+  , createLazyPlayerState
+  , createLazyPlayerStateJs
+  , findMatchLazy
+  , markMessageUsedLazy
+  , getTranslationMapLazy
   ) where
 
 import Prelude
@@ -23,6 +30,7 @@ import Effect as Effect
 import Effect.Aff as Effect.Aff
 import Effect.Class as Effect.Class
 import Effect.Ref as Effect.Ref
+import Foreign.Object as Foreign.Object
 import Replay.Hash as Replay.Hash
 import Replay.IdTranslation as Replay.IdTranslation
 import Replay.Protocol.Types as Replay.Protocol.Types
@@ -192,3 +200,125 @@ translateResponseEnvelope (Replay.Protocol.Types.Envelope recordedEnv) (Replay.P
         }
     Replay.Recording.PayloadCommand _ ->
       Data.Maybe.Nothing
+
+-- ============================================================================
+-- Lazy Player State
+-- ============================================================================
+
+-- | Player state for lazy-loaded recordings.
+-- | Uses LazyRecording (with raw JSON messages) and LazyHashIndex for O(1) lookup.
+-- | Messages are decoded on-demand only when matched.
+type LazyPlayerState =
+  { lazyRecording :: Replay.Recording.LazyRecording
+  , lazyHashIndex :: Replay.Recording.LazyHashIndex
+  , usedMessagesRef :: Effect.Ref.Ref (Data.Set.Set Int)
+  , translationMapRef :: Effect.Ref.Ref Replay.IdTranslation.TranslationMap
+  }
+
+-- | Create a player state from a lazily loaded recording and pre-built hash index.
+-- |
+-- | The hash index should be built using `buildHashIndexChunked` which processes
+-- | messages in chunks to prevent blocking the event loop.
+-- |
+-- | Parameters:
+-- | - lazyRec: A LazyRecording with raw JSON messages
+-- | - hashIndex: A LazyHashIndex mapping hashes to raw messages
+-- |
+-- | Returns an Effect that produces the lazy player state.
+createLazyPlayerState :: Replay.Recording.LazyRecording -> Replay.Recording.LazyHashIndex -> Effect.Effect LazyPlayerState
+createLazyPlayerState lazyRec hashIndex = do
+  usedMessagesRef <- Effect.Ref.new Data.Set.empty
+  translationMapRef <- Effect.Ref.new Replay.IdTranslation.emptyTranslationMap
+  pure { lazyRecording: lazyRec, lazyHashIndex: hashIndex, usedMessagesRef, translationMapRef }
+
+-- | JavaScript-friendly version of createLazyPlayerState.
+-- | Curried to work with JavaScript calling conventions.
+-- |
+-- | Usage from JavaScript:
+-- |   const playerState = createLazyPlayerStateJs(lazyRecording)(hashIndex)();
+createLazyPlayerStateJs :: Replay.Recording.LazyRecording -> Replay.Recording.LazyHashIndex -> Effect.Effect LazyPlayerState
+createLazyPlayerStateJs = createLazyPlayerState
+
+-- | Get the translation map from a lazy player state.
+getTranslationMapLazy :: LazyPlayerState -> Effect.Effect Replay.IdTranslation.TranslationMap
+getTranslationMapLazy state = Effect.Ref.read state.translationMapRef
+
+-- | Mark a message as used in a lazy player state.
+markMessageUsedLazy :: LazyPlayerState -> Int -> Effect.Effect Unit
+markMessageUsedLazy state index =
+  Effect.Ref.modify_ (Data.Set.insert index) state.usedMessagesRef
+
+-- | Find a matching message by hash in a lazy player state.
+-- |
+-- | This function:
+-- | 1. Looks up the hash in the LazyHashIndex (O(1) lookup)
+-- | 2. Finds the first unused entry with that hash
+-- | 3. Decodes only the matched message on-demand
+-- |
+-- | Non-matching messages remain as raw JSON and are never decoded.
+-- |
+-- | Returns Maybe (Tuple Int RecordedMessage) where:
+-- | - Int is the message index in the original array
+-- | - RecordedMessage is the fully decoded message
+-- |
+-- | Returns Nothing if:
+-- | - No message has the given hash
+-- | - All messages with that hash have already been used
+-- | - Decoding the matched message fails
+findMatchLazy
+  :: String
+  -> LazyPlayerState
+  -> Effect.Effect (Data.Maybe.Maybe (Data.Tuple.Tuple Int Replay.Recording.RecordedMessage))
+findMatchLazy hashKey state = do
+  usedMessages <- Effect.Ref.read state.usedMessagesRef
+
+  -- Look up in the hash index
+  case Foreign.Object.lookup hashKey state.lazyHashIndex of
+    Data.Maybe.Just entries ->
+      -- Find first unused entry and decode it
+      pure $ findFirstUnusedAndDecode usedMessages entries
+    Data.Maybe.Nothing ->
+      -- Hash not in index - try linear search as fallback
+      pure $ findMatchLazyLinear hashKey usedMessages state.lazyRecording.messages
+  where
+  -- Find first unused entry in hash index and decode on-demand
+  findFirstUnusedAndDecode
+    :: Data.Set.Set Int
+    -> Array { index :: Int, message :: Data.Argonaut.Core.Json }
+    -> Data.Maybe.Maybe (Data.Tuple.Tuple Int Replay.Recording.RecordedMessage)
+  findFirstUnusedAndDecode usedSet entries =
+    case Data.Array.uncons entries of
+      Data.Maybe.Nothing -> Data.Maybe.Nothing
+      Data.Maybe.Just { head: entry, tail: rest } ->
+        if Data.Set.member entry.index usedSet then findFirstUnusedAndDecode usedSet rest
+        else
+          -- Found unused entry - decode on demand
+          case Replay.Recording.decodeMessageOnDemand entry.message of
+            Data.Either.Right decoded -> Data.Maybe.Just (Data.Tuple.Tuple entry.index decoded)
+            Data.Either.Left _ -> findFirstUnusedAndDecode usedSet rest -- Skip if decode fails
+
+-- | Linear search fallback for lazy player state.
+-- | Searches through raw JSON messages when hash is not found in index.
+findMatchLazyLinear
+  :: String
+  -> Data.Set.Set Int
+  -> Array Data.Argonaut.Core.Json
+  -> Data.Maybe.Maybe (Data.Tuple.Tuple Int Replay.Recording.RecordedMessage)
+findMatchLazyLinear hashKey usedMessages messages =
+  searchFromIndex 0
+  where
+  searchFromIndex :: Int -> Data.Maybe.Maybe (Data.Tuple.Tuple Int Replay.Recording.RecordedMessage)
+  searchFromIndex idx =
+    case Data.Array.index messages idx of
+      Data.Maybe.Nothing -> Data.Maybe.Nothing
+      Data.Maybe.Just msgJson ->
+        if Data.Set.member idx usedMessages then searchFromIndex (idx + 1)
+        else
+          -- Check if this message matches the hash
+          case Replay.Recording.extractHashOnly msgJson of
+            Data.Maybe.Just h | h == hashKey ->
+              -- Found a match - decode on demand
+              case Replay.Recording.decodeMessageOnDemand msgJson of
+                Data.Either.Right decoded -> Data.Maybe.Just (Data.Tuple.Tuple idx decoded)
+                Data.Either.Left _ -> searchFromIndex (idx + 1) -- Skip if decode fails
+            _ -> searchFromIndex (idx + 1)

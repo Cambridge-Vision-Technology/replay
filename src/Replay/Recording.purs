@@ -13,10 +13,24 @@ module Replay.Recording
   , buildHashIndex
   , HashIndex
   , toCompressedPath
+  -- Lazy loading types and functions
+  , LazyRecording
+  , loadRecordingLazy
+  , loadRecordingLazyJs
+  -- On-demand decoding functions
+  , decodeMessageOnDemand
+  , findMessageByHash
+  -- Chunked hash index building
+  , LazyHashIndex
+  , buildHashIndexChunked
+  , buildHashIndexChunkedJs
+  -- Hash extraction utility
+  , extractHashOnly
   ) where
 
 import Prelude
 
+import Control.Promise as Control.Promise
 import Data.Argonaut.Core as Data.Argonaut.Core
 import Data.Argonaut.Decode as Data.Argonaut.Decode
 import Data.Argonaut.Decode (class DecodeJson, (.:), (.:?))
@@ -30,9 +44,13 @@ import Data.Maybe as Data.Maybe
 import Data.String as Data.String
 import Data.Traversable as Data.Traversable
 import Data.Tuple as Data.Tuple
+import Effect as Effect
 import Effect.Aff as Effect.Aff
+import Foreign.Object as Foreign.Object
 import Effect.Class as Effect.Class
 import FFI.Buffer as FFI.Buffer
+import FFI.EventLoop as FFI.EventLoop
+import FFI.JsonStream as FFI.JsonStream
 import FFI.Zstd as FFI.Zstd
 import Node.Buffer as Node.Buffer
 import Node.Encoding as Node.Encoding
@@ -211,55 +229,63 @@ loadCompressedContent filepath = do
           content <- Effect.Class.liftEffect $ FFI.Buffer.toString "utf8" decompressedBuffer
           pure $ Data.Either.Right content
 
+-- | Resolve a recording file path, trying compressed format first.
+-- | Returns the resolved path and whether it's compressed, or an error if not found.
+-- |
+-- | Priority: .json.zstd > .json (compressed format preferred)
+-- | If the provided path is already compressed (.json.zstd), only that path is tried.
+resolveRecordingPath :: String -> Effect.Aff.Aff (Data.Either.Either String { path :: String, isCompressed :: Boolean })
+resolveRecordingPath filepath = do
+  let
+    compressedPath = toCompressedPath filepath
+    uncompressedPath = filepath
+    pathsToTry =
+      if isCompressedPath filepath then
+        [ { path: filepath, isCompressed: true } ]
+      else
+        [ { path: compressedPath, isCompressed: true }
+        , { path: uncompressedPath, isCompressed: false }
+        ]
+  tryPaths pathsToTry
+  where
+  tryPaths :: Array { path :: String, isCompressed :: Boolean } -> Effect.Aff.Aff (Data.Either.Either String { path :: String, isCompressed :: Boolean })
+  tryPaths paths =
+    case Data.Array.uncons paths of
+      Data.Maybe.Nothing ->
+        pure $ Data.Either.Left $ "No recording file found at: " <> filepath
+      Data.Maybe.Just { head: candidate, tail: remainingPaths } -> do
+        exists <- fileExists candidate.path
+        if exists then
+          pure $ Data.Either.Right candidate
+        else
+          tryPaths remainingPaths
+
 -- | Load a recording from file path
 -- | Automatically detects and handles both .json and .json.zstd formats
 -- | Priority: .json.zstd > .json (compressed format preferred)
 loadRecording :: String -> Effect.Aff.Aff (Data.Either.Either String Recording)
 loadRecording filepath = do
-  -- Determine paths to try
-  let
-    compressedPath = toCompressedPath filepath
-    uncompressedPath = filepath
-    -- If the provided path is already compressed, don't try to add extension
-    pathsToTry =
-      if isCompressedPath filepath then
-        [ filepath ]
-      else
-        [ compressedPath, uncompressedPath ]
-
-  -- Try compressed format first, then fall back to uncompressed
-  tryLoadPaths pathsToTry
-  where
-  tryLoadPaths :: Array String -> Effect.Aff.Aff (Data.Either.Either String Recording)
-  tryLoadPaths paths =
-    case Data.Array.uncons paths of
-      Data.Maybe.Nothing ->
-        pure $ Data.Either.Left $ "No recording file found at: " <> filepath
-      Data.Maybe.Just { head: path, tail: remainingPaths } -> do
-        exists <- fileExists path
-        if exists then do
-          contentResult <-
-            if isCompressedPath path then
-              loadCompressedContent path
-            else do
-              result <- Effect.Aff.attempt $ Node.FS.Aff.readTextFile Node.Encoding.UTF8 path
-              case result of
-                Data.Either.Left err ->
-                  pure $ Data.Either.Left $ "Could not read file: " <> path <> "\nError: " <> show err
-                Data.Either.Right content ->
-                  pure $ Data.Either.Right content
-          case contentResult of
+  pathResult <- resolveRecordingPath filepath
+  case pathResult of
+    Data.Either.Left err ->
+      pure $ Data.Either.Left err
+    Data.Either.Right { path, isCompressed } -> do
+      contentResult <-
+        if isCompressed then
+          loadCompressedContent path
+        else do
+          result <- Effect.Aff.attempt $ Node.FS.Aff.readTextFile Node.Encoding.UTF8 path
+          case result of
             Data.Either.Left err ->
-              -- Try next path if this one failed
-              if Data.Array.null remainingPaths then
-                pure $ Data.Either.Left err
-              else
-                tryLoadPaths remainingPaths
+              pure $ Data.Either.Left $ "Could not read file: " <> path <> "\nError: " <> show err
             Data.Either.Right content ->
-              parseRecordingContent path content
-        else
-          tryLoadPaths remainingPaths
-
+              pure $ Data.Either.Right content
+      case contentResult of
+        Data.Either.Left err ->
+          pure $ Data.Either.Left err
+        Data.Either.Right content ->
+          parseRecordingContent path content
+  where
   parseRecordingContent :: String -> String -> Effect.Aff.Aff (Data.Either.Either String Recording)
   parseRecordingContent path content =
     case Data.Argonaut.Decode.parseJson content of
@@ -339,3 +365,208 @@ buildHashIndex recording =
       existing = Data.Maybe.fromMaybe [] (Data.Map.lookup hashKey hashMap)
     in
       Data.Map.insert hashKey (Data.Array.snoc existing entry) hashMap
+
+-- ============================================================================
+-- Lazy Recording Loading
+-- ============================================================================
+
+-- | A lazily loaded recording that stores messages as raw JSON.
+-- | Metadata is decoded upfront, but individual messages remain as raw JSON
+-- | until explicitly decoded on-demand. This allows loading large recordings
+-- | without blocking the event loop for full message decoding.
+type LazyRecording =
+  { schemaVersion :: Int
+  , scenarioName :: String
+  , recordedAt :: String
+  , messages :: Array Data.Argonaut.Core.Json -- Raw JSON, not decoded
+  }
+
+-- | Load a recording file lazily, parsing only metadata upfront.
+-- | Messages are stored as raw JSON and NOT decoded during loading.
+-- | This prevents blocking the event loop when loading large recording files.
+-- |
+-- | Uses the streaming JSON parser to process the messages array in chunks,
+-- | yielding control to the event loop periodically.
+loadRecordingLazy :: String -> Effect.Aff.Aff (Data.Either.Either String LazyRecording)
+loadRecordingLazy filepath = do
+  pathResult <- resolveRecordingPath filepath
+  case pathResult of
+    Data.Either.Left err ->
+      pure $ Data.Either.Left err
+    Data.Either.Right { path, isCompressed } -> do
+      contentResult <-
+        if isCompressed then
+          loadCompressedContentAsBuffer path
+        else do
+          result <- Effect.Aff.attempt $ Node.FS.Aff.readFile path
+          case result of
+            Data.Either.Left err ->
+              pure $ Data.Either.Left $ "Could not read file: " <> path <> "\nError: " <> show err
+            Data.Either.Right buffer ->
+              pure $ Data.Either.Right buffer
+      case contentResult of
+        Data.Either.Left err ->
+          pure $ Data.Either.Left err
+        Data.Either.Right buffer ->
+          parseRecordingContentLazy path buffer
+  where
+  -- Load and decompress a .json.zstd file, returning a Buffer
+  loadCompressedContentAsBuffer :: String -> Effect.Aff.Aff (Data.Either.Either String Node.Buffer.Buffer)
+  loadCompressedContentAsBuffer path = do
+    result <- Effect.Aff.attempt $ Node.FS.Aff.readFile path
+    case result of
+      Data.Either.Left err ->
+        pure $ Data.Either.Left $ "Could not read compressed file: " <> path <> "\nError: " <> show err
+      Data.Either.Right compressedBuffer -> do
+        decompressResult <- Effect.Aff.attempt $ FFI.Zstd.decompress compressedBuffer
+        case decompressResult of
+          Data.Either.Left err ->
+            pure $ Data.Either.Left $ "Could not decompress file: " <> path <> "\nError: " <> show err
+          Data.Either.Right decompressedBuffer ->
+            pure $ Data.Either.Right decompressedBuffer
+
+  -- Parse a recording buffer lazily using streaming JSON parser.
+  -- This uses the streaming parser from the start - no synchronous parseJson on the full content.
+  -- The streaming parser extracts metadata synchronously (small fields) but parses the
+  -- messages array in chunks, yielding to the event loop periodically.
+  parseRecordingContentLazy :: String -> Node.Buffer.Buffer -> Effect.Aff.Aff (Data.Either.Either String LazyRecording)
+  parseRecordingContentLazy path buffer = do
+    -- Use the streaming parser to parse the recording without blocking.
+    -- This avoids the synchronous parseJson call on the full content.
+    parseResult <- Effect.Aff.attempt $ FFI.JsonStream.parseRecordingStreamAff buffer
+    case parseResult of
+      Data.Either.Left err ->
+        pure $ Data.Either.Left $ "Invalid JSON in " <> path <> "\nError: " <> show err
+      Data.Either.Right streamedRec ->
+        -- Validate schema version
+        case validateSchemaVersion streamedRec.schemaVersion of
+          SchemaIncompatible { found, expected } ->
+            pure $ Data.Either.Left $ "Incompatible schema version in " <> path <> ". Found version " <> show found <> ", expected version " <> show expected
+          SchemaValid ->
+            pure $ Data.Either.Right
+              { schemaVersion: streamedRec.schemaVersion
+              , scenarioName: streamedRec.scenarioName
+              , recordedAt: streamedRec.recordedAt
+              , messages: streamedRec.messages
+              }
+
+-- | JavaScript-friendly version of loadRecordingLazy.
+-- | Returns an Effect that produces a Promise, which is the standard pattern
+-- | for calling PureScript async functions from JavaScript.
+-- |
+-- | Usage from JavaScript:
+-- |   const result = await loadRecordingLazyJs(path)();
+-- |   if (result.constructor.name === 'Right') {
+-- |     const recording = result.value0;
+-- |   }
+loadRecordingLazyJs :: String -> Effect.Effect (Control.Promise.Promise (Data.Either.Either String LazyRecording))
+loadRecordingLazyJs filepath = Control.Promise.fromAff (loadRecordingLazy filepath)
+
+-- ============================================================================
+-- On-Demand Message Decoding
+-- ============================================================================
+
+-- | Decode a single raw JSON message into a RecordedMessage on demand.
+-- | This is the core function for lazy message decoding - it takes a raw Json
+-- | value from a LazyRecording and fully decodes it only when needed.
+-- |
+-- | Returns Either String RecordedMessage where Left contains an error message
+-- | if decoding fails, and Right contains the successfully decoded message.
+decodeMessageOnDemand :: Data.Argonaut.Core.Json -> Data.Either.Either String RecordedMessage
+decodeMessageOnDemand json =
+  case decodeRecordedMessage json of
+    Data.Either.Left err -> Data.Either.Left (Data.Argonaut.Decode.printJsonDecodeError err)
+    Data.Either.Right msg -> Data.Either.Right msg
+
+-- | Extract only the hash field from a raw JSON message without full decoding.
+-- | This is used for efficient hash-based lookup to avoid decoding messages
+-- | that don't match the target hash.
+extractHashOnly :: Data.Argonaut.Core.Json -> Data.Maybe.Maybe String
+extractHashOnly json =
+  case Data.Argonaut.Decode.decodeJson json of
+    Data.Either.Left _ -> Data.Maybe.Nothing
+    Data.Either.Right (obj :: Foreign.Object.Object Data.Argonaut.Core.Json) ->
+      case Foreign.Object.lookup "hash" obj of
+        Data.Maybe.Nothing -> Data.Maybe.Nothing
+        Data.Maybe.Just hashJson ->
+          case Data.Argonaut.Decode.decodeJson hashJson of
+            Data.Either.Left _ -> Data.Maybe.Nothing
+            Data.Either.Right hashValue -> hashValue
+
+-- | Find a message by its hash in a LazyRecording and decode only that message.
+-- | This function searches through the raw JSON messages, checking only the hash
+-- | field of each message until it finds a match. Only the matching message is
+-- | fully decoded, keeping all other messages as raw JSON.
+-- |
+-- | Returns Maybe RecordedMessage - Nothing if no message with that hash is found,
+-- | or Just the decoded message if found. If decoding fails for a matching hash,
+-- | returns Nothing.
+findMessageByHash :: String -> LazyRecording -> Data.Maybe.Maybe RecordedMessage
+findMessageByHash targetHash lazyRec =
+  findFirst lazyRec.messages
+  where
+  findFirst :: Array Data.Argonaut.Core.Json -> Data.Maybe.Maybe RecordedMessage
+  findFirst msgs =
+    case Data.Array.uncons msgs of
+      Data.Maybe.Nothing -> Data.Maybe.Nothing
+      Data.Maybe.Just { head: msg, tail: rest } ->
+        case extractHashOnly msg of
+          Data.Maybe.Just hash | hash == targetHash ->
+            -- Found a match - decode this message fully
+            case decodeMessageOnDemand msg of
+              Data.Either.Right decoded -> Data.Maybe.Just decoded
+              Data.Either.Left _ -> Data.Maybe.Nothing -- Decoding failed
+          _ ->
+            -- No match or no hash - continue searching
+            findFirst rest
+
+-- ============================================================================
+-- Chunked Hash Index Building
+-- ============================================================================
+
+-- | Hash index type for lazy recordings.
+-- | Uses Foreign.Object (JavaScript object) for efficient lookup from JavaScript.
+-- | Keys are hash strings, values are arrays of {index, message} where message is raw JSON.
+type LazyHashIndex = FFI.EventLoop.RawHashIndex
+
+-- | Default chunk size for processing messages.
+-- | Processes 50 messages at a time before yielding to the event loop.
+-- | This balances throughput (fewer yields = less overhead) with responsiveness
+-- | (more yields = shorter blocking periods).
+defaultChunkSize :: Int
+defaultChunkSize = 50
+
+-- | Build a hash index from a LazyRecording in chunks, yielding to the event loop
+-- | between chunks to prevent blocking.
+-- |
+-- | This function processes messages in batches (default 50 messages per batch),
+-- | yielding control to the event loop after each batch. This ensures the Node.js
+-- | event loop remains responsive during index building for large recordings.
+-- |
+-- | The returned hash index maps hash strings to arrays of {index, message} objects,
+-- | where 'index' is the position in the messages array and 'message' is the raw JSON.
+-- |
+-- | Parameters:
+-- | - lazyRec: The LazyRecording containing raw JSON messages
+-- |
+-- | Returns an Aff that resolves to the hash index.
+buildHashIndexChunked :: LazyRecording -> Effect.Aff.Aff LazyHashIndex
+buildHashIndexChunked lazyRec =
+  FFI.EventLoop.buildHashIndexChunkedAff defaultChunkSize lazyRec.messages
+
+-- | JavaScript-friendly version of buildHashIndexChunked.
+-- | Returns an Effect that produces a Promise, which is the standard pattern
+-- | for calling PureScript async functions from JavaScript.
+-- |
+-- | Usage from JavaScript:
+-- |   const hashIndex = await buildHashIndexChunkedJs(lazyRecording)();
+-- |   // hashIndex is a plain JavaScript object where:
+-- |   // - Keys are hash strings
+-- |   // - Values are arrays of {index, message}
+-- |
+-- | The function processes messages in chunks of 50, yielding to the event loop
+-- | between chunks to prevent blocking. This allows heartbeat messages and other
+-- | scheduled operations to run during index building.
+buildHashIndexChunkedJs :: LazyRecording -> Effect.Effect (Control.Promise.Promise LazyHashIndex)
+buildHashIndexChunkedJs lazyRec =
+  Control.Promise.fromAff (buildHashIndexChunked lazyRec)
