@@ -25,6 +25,7 @@ jobs:
       inventory-runner: macos-arm64-nix-darwin
       default-branch: main
       visibility: private
+      include-output-paths: false
       runner-map: |
         {
           "aarch64-darwin": "macos-arm64-nix-darwin"
