@@ -80,7 +80,7 @@ jobs:
 
       - name: Create issue if duplicates found
         if: steps.dedup.outputs.exit_code != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const output = `${{ steps.dedup.outputs.output }}`;
@@ -169,7 +169,7 @@ jobs:
 
       - name: Create issue if dead code found
         if: steps.scythe.outputs.exit_code != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           SCYTHE_OUTPUT: ${{ steps.scythe.outputs.output }}
         with:
@@ -257,7 +257,7 @@ jobs:
 
       - name: Create issue if library suggestions found
         if: steps.drop.outputs.exit_code == '0' && contains(steps.drop.outputs.output, 'Possible match')
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           DROP_OUTPUT: ${{ steps.drop.outputs.output }}
         with:
