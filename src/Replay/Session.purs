@@ -130,11 +130,16 @@ createRecorderAndPlayer config =
         , player: Data.Maybe.Nothing
         }
 
+    -- NOTE: Playback mode also creates a recorder so that incoming messages
+    -- are stored in memory for control API queries (get_messages). Without
+    -- this, the control API returns empty results in playback mode, which
+    -- breaks test assertions that inspect harness writes (e.g. state.json).
     Replay.Types.ModePlayback -> do
       case config.recordingPath of
-        Data.Maybe.Nothing ->
+        Data.Maybe.Nothing -> do
+          recorder <- Effect.Class.liftEffect $ Replay.Recorder.createRecorder (unwrapSessionId config.sessionId)
           pure $ Data.Either.Right
-            { recorder: Data.Maybe.Nothing
+            { recorder: Data.Maybe.Just recorder
             , player: Data.Maybe.Nothing
             }
         Data.Maybe.Just path -> do
@@ -144,8 +149,9 @@ createRecorderAndPlayer config =
               pure $ Data.Either.Left (Replay.Protocol.Types.RecordingLoadFailed err)
             Data.Either.Right recording -> do
               player <- Effect.Class.liftEffect $ Replay.Player.createPlayerState recording
+              recorder <- Effect.Class.liftEffect $ Replay.Recorder.createRecorder (unwrapSessionId config.sessionId)
               pure $ Data.Either.Right
-                { recorder: Data.Maybe.Nothing
+                { recorder: Data.Maybe.Just recorder
                 , player: Data.Maybe.Just player
                 }
 
