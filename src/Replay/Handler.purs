@@ -138,7 +138,7 @@ handleInterceptMatch
   -> Replay.Protocol.Types.Envelope Replay.Protocol.Types.Command
   -> Replay.Interceptor.InterceptResult
   -> Effect.Aff.Aff (Data.Either.Either HandleError HandleResult)
-handleInterceptMatch mode maybeRecorder commandEnvelope interceptResult = do
+handleInterceptMatch _mode maybeRecorder commandEnvelope interceptResult = do
   let (Replay.Protocol.Types.Envelope env) = commandEnvelope
   case interceptResult.delay of
     Data.Maybe.Just (Replay.Protocol.Types.Milliseconds delayMs) ->
@@ -150,15 +150,11 @@ handleInterceptMatch mode maybeRecorder commandEnvelope interceptResult = do
 
   let responseEnvelope = Replay.Protocol.Envelope.buildResponseEnvelope env timestamp interceptResult.response
 
-  case mode of
-    Replay.Types.ModeRecord ->
-      case maybeRecorder of
-        Data.Maybe.Just recorder -> do
-          Effect.Class.liftEffect $ recordCommandToRecorder recorder commandEnvelope
-          Effect.Class.liftEffect $ recordEventToRecorder recorder responseEnvelope
-        Data.Maybe.Nothing ->
-          pure unit
-    _ ->
+  case maybeRecorder of
+    Data.Maybe.Just recorder -> do
+      Effect.Class.liftEffect $ recordCommandToRecorder recorder commandEnvelope
+      Effect.Class.liftEffect $ recordEventToRecorder recorder responseEnvelope
+    Data.Maybe.Nothing ->
       pure unit
 
   pure $ Data.Either.Right (RespondDirectly responseEnvelope)
@@ -179,7 +175,7 @@ handleProgramChannelCommandByMode mode maybeRecorder maybePlayer pendingForwards
       handleProgramRecord maybeRecorder pendingForwards commandEnvelope
 
     Replay.Types.ModePlayback ->
-      handleProgramPlayback maybePlayer commandEnvelope
+      handleProgramPlayback maybeRecorder maybePlayer commandEnvelope
 
 handlePlatformChannelEvent
   :: Replay.Types.HarnessMode
@@ -284,10 +280,11 @@ handlePlatformRecord maybeRecorder pendingForwards eventEnvelope = do
       pure $ Data.Either.Right (ForwardToProgram forwardedEnvelope)
 
 handleProgramPlayback
-  :: Data.Maybe.Maybe Replay.Player.PlayerState
+  :: Data.Maybe.Maybe Replay.Recorder.RecorderState
+  -> Data.Maybe.Maybe Replay.Player.PlayerState
   -> Replay.Protocol.Types.Envelope Replay.Protocol.Types.Command
   -> Effect.Aff.Aff (Data.Either.Either HandleError HandleResult)
-handleProgramPlayback maybePlayer commandEnvelope =
+handleProgramPlayback maybeRecorder maybePlayer commandEnvelope =
   case maybePlayer of
     Data.Maybe.Nothing ->
       pure $ Data.Either.Left (UnexpectedCommand "Playback mode requires PlayerState")
@@ -296,7 +293,13 @@ handleProgramPlayback maybePlayer commandEnvelope =
       case result of
         Data.Either.Left err ->
           pure $ Data.Either.Left (PlaybackError (playerErrorToHarnessError err))
-        Data.Either.Right eventEnvelope ->
+        Data.Either.Right eventEnvelope -> do
+          case maybeRecorder of
+            Data.Maybe.Just recorder -> do
+              Effect.Class.liftEffect $ recordCommandToRecorder recorder commandEnvelope
+              Effect.Class.liftEffect $ recordEventToRecorder recorder eventEnvelope
+            Data.Maybe.Nothing ->
+              pure unit
           pure $ Data.Either.Right (RespondDirectly eventEnvelope)
 
 playerErrorToHarnessError :: Replay.Player.PlaybackError -> Replay.Types.HarnessError
