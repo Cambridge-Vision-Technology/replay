@@ -468,6 +468,53 @@ testCreatePlayerStateInitializesCorrectly = do
   else
     pure $ Replay.Common.TestFailure "createPlayerState initializes state correctly" "State not initialized correctly"
 
+-- | Verify that multiple messages with the same hash are returned in recording
+-- | order (ascending index), not reverse order. This is critical for effects
+-- | like clock requests where all payloads hash identically but each response
+-- | carries a different timestamp.
+testFindMatchReturnsSameHashInRecordingOrder :: Effect.Aff.Aff Replay.Common.TestResult
+testFindMatchReturnsSameHashInRecordingOrder = do
+  let request = makeHttpRequest "GET" "https://example.com/api"
+
+  messages <- Effect.Class.liftEffect do
+    cmd1 <- makeCommandMessageEffect "stream1" "trace1" request
+    cmd2 <- makeCommandMessageEffect "stream2" "trace1" request
+    cmd3 <- makeCommandMessageEffect "stream3" "trace1" request
+    pure
+      [ cmd1
+      , makeResponseMessage "stream1" "trace1" (makeHttpResponse 200 "first")
+      , cmd2
+      , makeResponseMessage "stream2" "trace1" (makeHttpResponse 200 "second")
+      , cmd3
+      , makeResponseMessage "stream3" "trace1" (makeHttpResponse 200 "third")
+      ]
+  let recording = makeTestRecording messages
+
+  state <- Effect.Class.liftEffect $ Replay.Player.createPlayerState recording
+
+  result1 <- Effect.Class.liftEffect $ Replay.Player.findMatch request state
+  case result1 of
+    Data.Maybe.Just (Data.Tuple.Tuple idx1 _) -> do
+      Effect.Class.liftEffect $ Replay.Player.markMessageUsed state idx1
+      result2 <- Effect.Class.liftEffect $ Replay.Player.findMatch request state
+      case result2 of
+        Data.Maybe.Just (Data.Tuple.Tuple idx2 _) -> do
+          Effect.Class.liftEffect $ Replay.Player.markMessageUsed state idx2
+          result3 <- Effect.Class.liftEffect $ Replay.Player.findMatch request state
+          case result3 of
+            Data.Maybe.Just (Data.Tuple.Tuple idx3 _) ->
+              if idx1 == 0 && idx2 == 2 && idx3 == 4 then
+                pure $ Replay.Common.TestSuccess "findMatch returns same-hash messages in ascending recording order"
+              else
+                pure $ Replay.Common.TestFailure "findMatch returns same-hash messages in ascending recording order"
+                  ("Expected indices [0, 2, 4], got [" <> show idx1 <> ", " <> show idx2 <> ", " <> show idx3 <> "]")
+            Data.Maybe.Nothing ->
+              pure $ Replay.Common.TestFailure "findMatch returns same-hash messages in ascending recording order" "Third match returned Nothing"
+        Data.Maybe.Nothing ->
+          pure $ Replay.Common.TestFailure "findMatch returns same-hash messages in ascending recording order" "Second match returned Nothing"
+    Data.Maybe.Nothing ->
+      pure $ Replay.Common.TestFailure "findMatch returns same-hash messages in ascending recording order" "First match returned Nothing"
+
 allTests :: Effect.Aff.Aff (Array Replay.Common.TestResult)
 allTests = do
   r1 <- testFindMatchReturnsCorrectMessage
@@ -481,7 +528,8 @@ allTests = do
   r9 <- testPlaybackRequestReturnsCorrectResponsePayload
   r10 <- testFindMatchMatchesByServiceType
   r11 <- testCreatePlayerStateInitializesCorrectly
-  pure [ r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11 ]
+  r12 <- testFindMatchReturnsSameHashInRecordingOrder
+  pure [ r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12 ]
 
 runTests :: Effect.Aff.Aff Replay.Common.TestResults
 runTests = Replay.Common.computeResults <$> allTests

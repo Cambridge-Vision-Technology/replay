@@ -351,7 +351,7 @@ buildHashIndex recording =
     indexedMessages = Data.Array.mapWithIndex (\idx msg -> Data.Tuple.Tuple idx msg) recording.messages
     toHashEntries = Data.Array.mapMaybe toHashEntry indexedMessages
   in
-    Data.Array.foldr insertEntry Data.Map.empty toHashEntries
+    Data.Array.foldl insertEntry Data.Map.empty toHashEntries
   where
   toHashEntry :: Data.Tuple.Tuple Int RecordedMessage -> Data.Maybe.Maybe (Data.Tuple.Tuple String { index :: Int, message :: RecordedMessage })
   toHashEntry (Data.Tuple.Tuple idx msg) =
@@ -359,8 +359,8 @@ buildHashIndex recording =
       Data.Maybe.Just h -> Data.Maybe.Just $ Data.Tuple.Tuple h { index: idx, message: msg }
       Data.Maybe.Nothing -> Data.Maybe.Nothing
 
-  insertEntry :: Data.Tuple.Tuple String { index :: Int, message :: RecordedMessage } -> HashIndex -> HashIndex
-  insertEntry (Data.Tuple.Tuple hashKey entry) hashMap =
+  insertEntry :: HashIndex -> Data.Tuple.Tuple String { index :: Int, message :: RecordedMessage } -> HashIndex
+  insertEntry hashMap (Data.Tuple.Tuple hashKey entry) =
     let
       existing = Data.Maybe.fromMaybe [] (Data.Map.lookup hashKey hashMap)
     in
