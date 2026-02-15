@@ -615,11 +615,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1770115704,
-        "narHash": "sha256-KHFT9UWOF2yRPlAnSXQJh6uVcgNcWlFqqiAZ7OVlHNc=",
+        "lastModified": 1771008912,
+        "narHash": "sha256-gf2AmWVTs8lEq7z/3ZAsgnZDhWIckkb+ZnAo5RzSxJg=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "e6eae2ee2110f3d31110d5c222cd395303343b08",
+        "rev": "a82ccc39b39b621151d6732718e3e250109076fa",
         "type": "github"
       },
       "original": {
@@ -887,12 +887,12 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1768617885,
-        "narHash": "sha256-rdlAHhoUNfbmi7GdpOPHeIsa22fJDVg2x5GcJ+IFYRY=",
-        "rev": "55cac3f860356be78f3cfa1650b615c560fd7354",
-        "revCount": 24,
+        "lastModified": 1770977238,
+        "narHash": "sha256-KUtiEKma+YjTg19dxhfvYdGWiq6rvsGa1oWRxFVa52A=",
+        "rev": "f452acd31011f18e1cdc8cb68944fdc98f0963c0",
+        "revCount": 26,
         "type": "tarball",
-        "url": "https://api.flakehub.com/f/pinned/Cambridge-Vision-Technology/purescript-dedup/0.1.24%2Brev-55cac3f860356be78f3cfa1650b615c560fd7354/019bc9db-c53d-7e05-9fec-c047260aa823/source.tar.gz"
+        "url": "https://api.flakehub.com/f/pinned/Cambridge-Vision-Technology/purescript-dedup/0.1.26%2Brev-f452acd31011f18e1cdc8cb68944fdc98f0963c0/019c5680-3ef7-7982-9e3f-d740330c60fb/source.tar.gz"
       },
       "original": {
         "type": "tarball",
@@ -1053,12 +1053,12 @@
         "utils": "utils_5"
       },
       "locked": {
-        "lastModified": 1769599322,
-        "narHash": "sha256-RMerm+6In3VVHp6FYx9vOEyU+9tnu8O9jeufnnm7Hrc=",
-        "rev": "e4bd182c13c2aac9a6f736540fd5b03e8a2791f9",
-        "revCount": 627,
+        "lastModified": 1770720996,
+        "narHash": "sha256-tV5lH63kwdUeEAYCklMeC/gPh/iUTeskYDonvOWYYSc=",
+        "rev": "e2ebe8fe344044e3cafeabc7597eb9341c9fa5c5",
+        "revCount": 635,
         "type": "tarball",
-        "url": "https://api.flakehub.com/f/pinned/Cambridge-Vision-Technology/purs-nix/0.1.627%2Brev-e4bd182c13c2aac9a6f736540fd5b03e8a2791f9/019c0476-85ca-7216-a529-7055d2628f1b/source.tar.gz"
+        "url": "https://api.flakehub.com/f/pinned/Cambridge-Vision-Technology/purs-nix/0.1.635%2Brev-e2ebe8fe344044e3cafeabc7597eb9341c9fa5c5/019c4739-e70b-706f-b17a-61a3ec700e38/source.tar.gz"
       },
       "original": {
         "type": "tarball",
@@ -1248,11 +1248,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1769691507,
-        "narHash": "sha256-8aAYwyVzSSwIhP2glDhw/G0i5+wOrren3v6WmxkVonM=",
+        "lastModified": 1770228511,
+        "narHash": "sha256-wQ6NJSuFqAEmIg2VMnLdCnUc0b7vslUohqqGGD+Fyxk=",
         "owner": "numtide",
         "repo": "treefmt-nix",
-        "rev": "28b19c5844cc6e2257801d43f2772a4b4c050a1b",
+        "rev": "337a4fe074be1042a35086f15481d763b8ddc0e7",
         "type": "github"
       },
       "original": {
