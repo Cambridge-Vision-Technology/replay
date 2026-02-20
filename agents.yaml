@@ -4,11 +4,11 @@ project:
     [
       "general",
       "testing",
-      "harness",
       "javascript",
       "nix",
       "purescript",
-      "purescript-algebraic-effects",
+      "purescript-js",
+      "cucumber",
     ]
   description: "Replay Library"
   header: |
