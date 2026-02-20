@@ -494,7 +494,8 @@
                   cd work
                   ${nodejs}/bin/node node_modules/.bin/cucumber-js \
                     --config cucumber.js \
-                    features/playback_mode.feature
+                    features/playback_mode.feature \
+                    features/intercept_playback_sync.feature
 
                   touch $out
                 '';
@@ -639,6 +640,7 @@
                   exec ${nodejs}/bin/node node_modules/.bin/cucumber-js \
                     --config cucumber.js \
                     features/playback_mode.feature \
+                    features/intercept_playback_sync.feature \
                     "$@"
                 ''
               );

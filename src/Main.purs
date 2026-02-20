@@ -266,9 +266,11 @@ startHarnessWithShutdown opts = do
               case harnessServer.mode of
                 Replay.Types.ModeRecord ->
                   case harnessServer.recorder of
-                    Data.Maybe.Just recorder ->
+                    Data.Maybe.Just recorder -> do
+                      globalMessages <- Effect.Class.liftEffect $ Replay.Recorder.getMessages recorder
+                      let hasRecordedMessages = Data.Array.length globalMessages > 0
                       case opts.recordingPath of
-                        Data.Maybe.Just path -> do
+                        Data.Maybe.Just path | hasRecordedMessages -> do
                           Effect.Class.liftEffect $ Effect.Console.log "Saving recording..."
                           saveResult <- Replay.Recorder.saveRecording recorder path
                           case saveResult of
@@ -276,7 +278,7 @@ startHarnessWithShutdown opts = do
                               Effect.Class.liftEffect $ Effect.Console.error $ "Failed to save recording: " <> err
                             Data.Either.Right _ ->
                               Effect.Class.liftEffect $ Effect.Console.log $ "Recording saved to: " <> path
-                        Data.Maybe.Nothing ->
+                        _ ->
                           pure unit
                     Data.Maybe.Nothing ->
                       pure unit

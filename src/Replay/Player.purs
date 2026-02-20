@@ -4,6 +4,7 @@ module Replay.Player
   , createPlayerState
   , findMatch
   , findMatchWithHash
+  , findAndMarkMatch
   , playbackRequest
   , markMessageUsed
   , getTranslationMap
@@ -132,15 +133,15 @@ isResponseForStream streamId msg =
 getEnvelopeStreamId :: Replay.Protocol.Types.Envelope Replay.Recording.MessagePayload -> Replay.Protocol.Types.StreamId
 getEnvelopeStreamId (Replay.Protocol.Types.Envelope env) = env.streamId
 
-playbackRequest
+findAndMarkMatch
   :: Replay.Protocol.Types.Envelope Replay.Protocol.Types.Command
   -> PlayerState
-  -> Effect.Aff.Aff (Data.Either.Either PlaybackError (Replay.Protocol.Types.Envelope Replay.Protocol.Types.Event))
-playbackRequest commandEnvelope state = do
+  -> Effect.Effect (Data.Either.Either PlaybackError (Data.Tuple.Tuple Int Replay.Recording.RecordedMessage))
+findAndMarkMatch commandEnvelope state = do
   let (Replay.Protocol.Types.Envelope env) = commandEnvelope
   case env.payload of
     Replay.Protocol.Types.CommandOpen requestPayload -> do
-      matchResult <- Effect.Class.liftEffect $ case env.payloadHash of
+      matchResult <- case env.payloadHash of
         Data.Maybe.Just clientHash ->
           findMatchWithHash clientHash state
         Data.Maybe.Nothing ->
@@ -148,36 +149,47 @@ playbackRequest commandEnvelope state = do
       case matchResult of
         Data.Maybe.Nothing ->
           pure $ Data.Either.Left (NoMatchFound requestPayload)
-
-        Data.Maybe.Just (Data.Tuple.Tuple matchIndex matchedCommand) -> do
-          let (Replay.Protocol.Types.Envelope matchedEnv) = matchedCommand.envelope
-          let recordedStreamId = matchedEnv.streamId
-          let recordedTraceId = matchedEnv.traceId
-          let playbackStreamId = env.streamId
-          let playbackTraceId = env.traceId
-
-          Effect.Class.liftEffect $ markMessageUsed state matchIndex
-
-          Effect.Class.liftEffect $ Effect.Ref.modify_
-            ( Replay.IdTranslation.registerStreamIdMapping recordedStreamId playbackStreamId
-                >>> Replay.IdTranslation.registerTraceIdMapping recordedTraceId playbackTraceId
-            )
-            state.translationMapRef
-
-          case findCorrespondingResponse matchIndex recordedStreamId state.recording.messages of
-            Data.Maybe.Nothing ->
-              pure $ Data.Either.Left (InvalidRequest "No corresponding response found in recording")
-
-            Data.Maybe.Just responseMessage -> do
-              let translatedResponse = translateResponseEnvelope responseMessage.envelope commandEnvelope
-              case translatedResponse of
-                Data.Maybe.Just eventEnvelope ->
-                  pure $ Data.Either.Right eventEnvelope
-                Data.Maybe.Nothing ->
-                  pure $ Data.Either.Left (UnexpectedPayload "Response message did not contain an Event")
-
+        Data.Maybe.Just match -> do
+          markMessageUsed state (Data.Tuple.fst match)
+          pure $ Data.Either.Right match
     Replay.Protocol.Types.CommandClose ->
       pure $ Data.Either.Left (InvalidRequest "Unexpected CommandClose without open")
+
+playbackRequest
+  :: Replay.Protocol.Types.Envelope Replay.Protocol.Types.Command
+  -> PlayerState
+  -> Effect.Aff.Aff (Data.Either.Either PlaybackError (Replay.Protocol.Types.Envelope Replay.Protocol.Types.Event))
+playbackRequest commandEnvelope state = do
+  let (Replay.Protocol.Types.Envelope env) = commandEnvelope
+  matchResult <- Effect.Class.liftEffect $ findAndMarkMatch commandEnvelope state
+  case matchResult of
+    Data.Either.Left err ->
+      pure $ Data.Either.Left err
+
+    Data.Either.Right (Data.Tuple.Tuple matchIndex matchedCommand) -> do
+      let (Replay.Protocol.Types.Envelope matchedEnv) = matchedCommand.envelope
+      let recordedStreamId = matchedEnv.streamId
+      let recordedTraceId = matchedEnv.traceId
+      let playbackStreamId = env.streamId
+      let playbackTraceId = env.traceId
+
+      Effect.Class.liftEffect $ Effect.Ref.modify_
+        ( Replay.IdTranslation.registerStreamIdMapping recordedStreamId playbackStreamId
+            >>> Replay.IdTranslation.registerTraceIdMapping recordedTraceId playbackTraceId
+        )
+        state.translationMapRef
+
+      case findCorrespondingResponse matchIndex recordedStreamId state.recording.messages of
+        Data.Maybe.Nothing ->
+          pure $ Data.Either.Left (InvalidRequest "No corresponding response found in recording")
+
+        Data.Maybe.Just responseMessage -> do
+          let translatedResponse = translateResponseEnvelope responseMessage.envelope commandEnvelope
+          case translatedResponse of
+            Data.Maybe.Just eventEnvelope ->
+              pure $ Data.Either.Right eventEnvelope
+            Data.Maybe.Nothing ->
+              pure $ Data.Either.Left (UnexpectedPayload "Response message did not contain an Event")
 
 translateResponseEnvelope
   :: Replay.Protocol.Types.Envelope Replay.Recording.MessagePayload

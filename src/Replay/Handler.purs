@@ -20,7 +20,6 @@ import Data.Either as Data.Either
 import Data.Int as Data.Int
 import Data.Map as Data.Map
 import Data.Maybe as Data.Maybe
-import Data.Newtype as Data.Newtype
 import Data.String as Data.String
 import Effect as Effect
 import Effect.Aff as Effect.Aff
@@ -126,19 +125,19 @@ handleProgramChannelCommand mode maybeRecorder maybePlayer pendingForwards inter
       interceptResult <- Effect.Class.liftEffect $ Replay.Interceptor.matchRequest requestPayload interceptRegistry
       case interceptResult of
         Data.Maybe.Just intercept ->
-          handleInterceptMatch mode maybeRecorder commandEnvelope intercept
+          handleInterceptMatch maybeRecorder maybePlayer commandEnvelope intercept
         Data.Maybe.Nothing ->
           handleProgramChannelCommandByMode mode maybeRecorder maybePlayer pendingForwards commandEnvelope
     Replay.Protocol.Types.CommandClose ->
       handleProgramChannelCommandByMode mode maybeRecorder maybePlayer pendingForwards commandEnvelope
 
 handleInterceptMatch
-  :: Replay.Types.HarnessMode
-  -> Data.Maybe.Maybe Replay.Recorder.RecorderState
+  :: Data.Maybe.Maybe Replay.Recorder.RecorderState
+  -> Data.Maybe.Maybe Replay.Player.PlayerState
   -> Replay.Protocol.Types.Envelope Replay.Protocol.Types.Command
   -> Replay.Interceptor.InterceptResult
   -> Effect.Aff.Aff (Data.Either.Either HandleError HandleResult)
-handleInterceptMatch _mode maybeRecorder commandEnvelope interceptResult = do
+handleInterceptMatch maybeRecorder maybePlayer commandEnvelope interceptResult = do
   let (Replay.Protocol.Types.Envelope env) = commandEnvelope
   case interceptResult.delay of
     Data.Maybe.Just (Replay.Protocol.Types.Milliseconds delayMs) ->
@@ -157,7 +156,29 @@ handleInterceptMatch _mode maybeRecorder commandEnvelope interceptResult = do
     Data.Maybe.Nothing ->
       pure unit
 
-  pure $ Data.Either.Right (RespondDirectly responseEnvelope)
+  consumeResult <- case maybePlayer of
+    Data.Maybe.Just player ->
+      advancePlayerForIntercept commandEnvelope player
+    Data.Maybe.Nothing ->
+      pure $ Data.Either.Right unit
+
+  case consumeResult of
+    Data.Either.Left err ->
+      pure $ Data.Either.Left err
+    Data.Either.Right _ ->
+      pure $ Data.Either.Right (RespondDirectly responseEnvelope)
+
+advancePlayerForIntercept
+  :: Replay.Protocol.Types.Envelope Replay.Protocol.Types.Command
+  -> Replay.Player.PlayerState
+  -> Effect.Aff.Aff (Data.Either.Either HandleError Unit)
+advancePlayerForIntercept commandEnvelope player = do
+  result <- Effect.Class.liftEffect $ Replay.Player.findAndMarkMatch commandEnvelope player
+  case result of
+    Data.Either.Right _ ->
+      pure $ Data.Either.Right unit
+    Data.Either.Left err ->
+      pure $ Data.Either.Left (PlaybackError (playerErrorToHarnessError err))
 
 handleProgramChannelCommandByMode
   :: Replay.Types.HarnessMode

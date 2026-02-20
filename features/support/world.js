@@ -6,9 +6,11 @@ import {
 } from "@cucumber/cucumber";
 import { spawn, spawnSync } from "child_process";
 import { promises as fs } from "fs";
+import { connect } from "net";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import WebSocket from "ws";
 
 setDefaultTimeout(30000);
 
@@ -79,12 +81,12 @@ class ReplayWorld {
     );
   }
 
-  async startHarness(mode) {
+  async startHarness(mode, recordingPath) {
     const harnessBinary = process.env.REPLAY_HARNESS_BINARY || "replay";
     const tmpDir = process.env.TMPDIR || "/tmp";
     const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
     this.harnessSocketPath = path.join(tmpDir, `replay-test-${uniqueId}.sock`);
-    this.recordingPath = this.getRecordingPath();
+    this.recordingPath = recordingPath || this.getRecordingPath();
 
     if (mode === "record") {
       const fixtureDir = path.dirname(this.recordingPath);
@@ -260,6 +262,87 @@ class ReplayWorld {
     if (this.workspace) {
       this.workspace = null;
     }
+  }
+
+  connectToHarness(sessionId) {
+    return new Promise((resolve, reject) => {
+      const url = sessionId
+        ? `ws://unix-socket/?session=${encodeURIComponent(sessionId)}`
+        : "ws://unix-socket/";
+      const ws = new WebSocket(url, {
+        createConnection: () => connect(this.harnessSocketPath),
+      });
+
+      const timeout = setTimeout(() => {
+        reject(new Error("WebSocket connection timed out after 5000ms"));
+      }, 5000);
+
+      ws.on("open", () => {
+        clearTimeout(timeout);
+        resolve(ws);
+      });
+
+      ws.on("error", (err) => {
+        clearTimeout(timeout);
+        reject(
+          new Error(
+            `WebSocket connection failed: ${err.message || err.code || String(err)}`,
+          ),
+        );
+      });
+    });
+  }
+
+  sendAndReceive(ws, message, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(
+          new Error(
+            `No response within ${timeoutMs}ms for message: ${JSON.stringify(message).substring(0, 200)}`,
+          ),
+        );
+      }, timeoutMs);
+
+      const handler = (data) => {
+        clearTimeout(timeout);
+        ws.removeListener("message", handler);
+        try {
+          resolve(JSON.parse(data.toString()));
+        } catch (err) {
+          reject(new Error(`Failed to parse response: ${data.toString()}`));
+        }
+      };
+
+      ws.on("message", handler);
+      ws.send(JSON.stringify(message));
+    });
+  }
+
+  async sendControlCommand(ws, command) {
+    const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    const envelope = {
+      requestId,
+      payload: command,
+    };
+    const response = await this.sendAndReceive(ws, envelope);
+    return response;
+  }
+
+  closeWs(ws) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+  }
+
+  extractResponsePayload(response) {
+    if (response.payload && response.payload.type === "close") {
+      const closePayload = response.payload.payload;
+      if (closePayload && closePayload.payload !== undefined) {
+        return closePayload.payload;
+      }
+      return closePayload;
+    }
+    return null;
   }
 }
 
