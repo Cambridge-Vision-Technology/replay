@@ -28,5 +28,6 @@ jobs:
       include-output-paths: false
       runner-map: |
         {
+          "x86_64-linux": "ubuntu-latest",
           "aarch64-darwin": "macos-arm64-nix-darwin"
         }

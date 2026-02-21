@@ -343,7 +343,7 @@
                 cp -r ${deps}/node_modules $out/
                 cp ${harnessBundle} $out/replay-harness.mjs
                 cat > $out/bin/replay <<'SCRIPT'
-                #!/usr/bin/env bash
+                #!${pkgs.bash}/bin/bash
                 set -euo pipefail
                 SCRIPT_DIR="$(cd "$(dirname "''${BASH_SOURCE[0]}")/.." && pwd)"
                 export NODE_PATH="$SCRIPT_DIR/node_modules"
@@ -370,7 +370,7 @@
                 cp -r ${deps}/node_modules $out/
                 cp ${echoClientBundle} $out/echo-client.mjs
                 cat > $out/bin/echo-client <<'SCRIPT'
-                #!/usr/bin/env bash
+                #!${pkgs.bash}/bin/bash
                 set -euo pipefail
                 SCRIPT_DIR="$(cd "$(dirname "''${BASH_SOURCE[0]}")/.." && pwd)"
                 export NODE_PATH="$SCRIPT_DIR/node_modules"
@@ -389,7 +389,7 @@
                 cp -r ${deps}/node_modules $out/
                 cp ${testUnitBundle} $out/test-unit.mjs
                 cat > $out/bin/test-unit <<'SCRIPT'
-                #!/usr/bin/env bash
+                #!${pkgs.bash}/bin/bash
                 set -euo pipefail
                 SCRIPT_DIR="$(cd "$(dirname "''${BASH_SOURCE[0]}")/.." && pwd)"
                 export NODE_PATH="$SCRIPT_DIR/node_modules"
@@ -499,6 +499,28 @@
 
                   touch $out
                 '';
+            wrapper-shebangs = pkgs.runCommand "check-wrapper-shebangs" { } ''
+              fail=0
+              for script in \
+                ${harnessServer}/bin/replay \
+                ${echoClient}/bin/echo-client \
+                ${testUnit}/bin/test-unit; do
+                shebang=$(head -n1 "$script")
+                if echo "$shebang" | grep -q '/usr/bin/env'; then
+                  echo "FAIL: $script has shebang using /usr/bin/env: $shebang"
+                  fail=1
+                else
+                  echo "OK: $script shebang: $shebang"
+                fi
+              done
+              if [ "$fail" -ne 0 ]; then
+                echo ""
+                echo "Wrapper scripts must not use /usr/bin/env in their shebang."
+                echo "Use Nix store bash path instead of /usr/bin/env."
+                exit 1
+              fi
+              touch $out
+            '';
           };
 
           apps = {
@@ -506,7 +528,6 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "replay-format-fix" ''
-                  #!/usr/bin/env bash
                   set -euo pipefail
                   echo "Formatting all files with treefmt (Nix + JavaScript + PureScript)..."
                   exec ${config.treefmt.build.wrapper}/bin/treefmt "$@"
@@ -537,7 +558,6 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "replay-test-live" ''
-                  #!/usr/bin/env bash
                   set -euo pipefail
 
                   echo "Running BDD tests in LIVE mode (real HTTP requests)..."
@@ -569,7 +589,6 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "replay-test-record" ''
-                  #!/usr/bin/env bash
                   set -euo pipefail
 
                   echo "Running BDD tests in RECORD mode (capturing fixtures)..."
@@ -618,7 +637,6 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "replay-test-playback" ''
-                  #!/usr/bin/env bash
                   set -euo pipefail
 
                   echo "Running BDD tests in PLAYBACK mode (using fixtures)..."
